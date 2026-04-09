@@ -1,5 +1,6 @@
 name: 'Jira Xport'
 description: 'Export all tickets from a Jira filter to a CSV file using the filter configured columns.'
+author: 'hlavrencic'
 branding:
   icon: 'download'
   color: 'blue'
@@ -18,7 +19,7 @@ inputs:
     description: 'Jira API token'
     required: true
   output:
-    description: 'Output CSV filename placed inside the output/ folder. Defaults to jira_filter_<id>_<timestamp>.csv'
+    description: 'Output CSV file path (relative to workspace). Defaults to jira_filter_<id>_<timestamp>.csv'
     required: false
     default: ''
   include_subtasks:
@@ -31,43 +32,54 @@ inputs:
     default: ''
 
 outputs:
-  output_dir:
-    description: 'Directory containing the generated CSV file(s)'
-    value: ${{ github.workspace }}/output
+  csv_path:
+    description: 'Path to the generated CSV file (relative to workspace)'
+    value: ${{ steps.export.outputs.csv_path }}
 
 runs:
   using: composite
   steps:
-    - name: Build jira-xport image
-      shell: bash
-      run: docker build -t jira-xport "${{ github.action_path }}"
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
 
-    - name: Run jira-xport
+    - name: Install dependencies
+      shell: bash
+      run: pip install -r "${{ github.action_path }}/requirements.txt"
+
+    - name: Export Jira filter to CSV
+      id: export
       shell: bash
       env:
         JIRA_URL: ${{ inputs.jira_url }}
         JIRA_EMAIL: ${{ inputs.jira_email }}
         JIRA_API_TOKEN: ${{ inputs.jira_api_token }}
+        INPUT_FILTER_ID: ${{ inputs.filter_id }}
+        INPUT_OUTPUT: ${{ inputs.output }}
+        INPUT_INCLUDE_SUBTASKS: ${{ inputs.include_subtasks }}
+        INPUT_SUBTASKS_LABELS: ${{ inputs.subtasks_labels }}
       run: |
-        mkdir -p "${{ github.workspace }}/output"
+        ARGS="$INPUT_FILTER_ID"
 
-        ARGS="${{ inputs.filter_id }}"
-
-        if [ -n "${{ inputs.output }}" ]; then
-          ARGS="$ARGS -o /app/output/${{ inputs.output }}"
+        if [ -n "$INPUT_OUTPUT" ]; then
+          ARGS="$ARGS -o $INPUT_OUTPUT"
         fi
 
-        if [ "${{ inputs.include_subtasks }}" = "true" ]; then
-          if [ -n "${{ inputs.subtasks_labels }}" ]; then
-            ARGS="$ARGS --subtasks ${{ inputs.subtasks_labels }}"
+        if [ "$INPUT_INCLUDE_SUBTASKS" = "true" ]; then
+          if [ -n "$INPUT_SUBTASKS_LABELS" ]; then
+            ARGS="$ARGS --subtasks $INPUT_SUBTASKS_LABELS"
           else
             ARGS="$ARGS --subtasks"
           fi
         fi
 
-        docker run --rm \
-          -e JIRA_URL \
-          -e JIRA_EMAIL \
-          -e JIRA_API_TOKEN \
-          -v "${{ github.workspace }}/output:/app/output" \
-          jira-xport $ARGS
+        python "${{ github.action_path }}/main.py" $ARGS
+
+        # Resolve the actual output path (may be auto-generated)
+        if [ -n "$INPUT_OUTPUT" ]; then
+          echo "csv_path=$INPUT_OUTPUT" >> "$GITHUB_OUTPUT"
+        else
+          CSV=$(ls -t jira_filter_${INPUT_FILTER_ID}_*.csv 2>/dev/null | head -1)
+          echo "csv_path=${CSV}" >> "$GITHUB_OUTPUT"
+        fi

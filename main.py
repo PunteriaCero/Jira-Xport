@@ -251,7 +251,11 @@ def main() -> None:
         headers = ["Key"]
 
     # Parent Key column is always the first column regardless of filter configuration
-    if "parent" not in field_ids:
+    if "parent" in field_ids:
+        idx = field_ids.index("parent")
+        field_ids.insert(0, field_ids.pop(idx))
+        headers.insert(0, headers.pop(idx))
+    else:
         field_ids.insert(0, "parent")
         headers.insert(0, "Parent Key")
 

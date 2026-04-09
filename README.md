@@ -77,7 +77,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Export Jira filter
+      - id: export
+        name: Export Jira filter
         uses: your-org/jira-xport@v1
         with:
           filter_id: '12345'
@@ -89,7 +90,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: jira-export
-          path: output/
+          path: ${{ steps.export.outputs.csv_path }}
 ```
 
 ### With subtasks
@@ -114,7 +115,7 @@ jobs:
 | `jira_url` | Jira instance URL | Yes | — |
 | `jira_email` | Jira user email | Yes | — |
 | `jira_api_token` | Jira API token | Yes | — |
-| `output` | Output CSV filename (placed in `output/`) | No | auto-generated |
+| `output` | Output CSV file path (relative to workspace) | No | auto-generated |
 | `include_subtasks` | `"true"` to include subtasks | No | `"false"` |
 | `subtasks_labels` | Comma-separated labels to filter subtasks | No | _(all subtasks)_ |
 
@@ -122,12 +123,12 @@ jobs:
 
 | Output | Description |
 |---|---|
-| `output_dir` | Path to the directory containing the generated CSV file |
+| `csv_path` | Path to the generated CSV file (relative to workspace) |
 
 ---
 
 ## Output
 
-The CSV is written to the `output/` folder. The filename defaults to `jira_filter_<filter_id>_<timestamp>.csv`.
+The CSV filename defaults to `jira_filter_<filter_id>_<timestamp>.csv` and is written to the current directory.
 
-When a filter has no custom column configuration, only the **Key** field is exported and a warning is printed to the console.
+The first column is always **Parent Key** (the key of the parent issue, or `-` if none). Remaining columns follow the filter's configured column layout. When a filter has no custom column configuration, only **Parent Key** and **Key** are exported and a warning is printed to the console.
