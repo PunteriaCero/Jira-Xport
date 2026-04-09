@@ -73,6 +73,10 @@ def _extract(field_id: str, issue: dict) -> str:
     if field_id == "issuekey":
         return issue.get("key", "")
 
+    if field_id == "parent":
+        parent = issue.get("fields", {}).get("parent")
+        return parent.get("key", "-") if parent else "-"
+
     value = issue.get("fields", {}).get(field_id)
     if value is None:
         return ""
@@ -107,6 +111,9 @@ def get_issues_from_filter(client: JIRA, filter_id: str, fields: list[str]) -> l
     url = f"{client._options['server']}/rest/api/3/search/jql"
     # issuekey is always returned by the API; requesting it explicitly is unnecessary
     fields_to_request = [f for f in fields if f != "issuekey"]
+    # parent must always be fetched to populate the Parent Key column
+    if "parent" not in fields_to_request:
+        fields_to_request.append("parent")
 
     print(f"[INFO] Fetching issues for filter ID {filter_id}...")
 
@@ -204,6 +211,11 @@ def main() -> None:
         )
         field_ids = ["issuekey"]
         headers = ["Key"]
+
+    # Parent Key column is always included regardless of filter configuration
+    if "parent" not in field_ids:
+        field_ids.append("parent")
+        headers.append("Parent Key")
 
     issues = get_issues_from_filter(client, args.filter_id, field_ids)
 
