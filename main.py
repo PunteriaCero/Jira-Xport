@@ -14,39 +14,6 @@ JIRA_URL = os.getenv("JIRA_URL")
 JIRA_EMAIL = os.getenv("JIRA_EMAIL")
 JIRA_API_TOKEN = os.getenv("JIRA_API_TOKEN")
 
-# Used when the filter has no custom column configuration
-DEFAULT_FIELD_IDS = [
-    "issuekey",
-    "summary",
-    "status",
-    "issuetype",
-    "priority",
-    "assignee",
-    "reporter",
-    "created",
-    "updated",
-    "labels",
-    "components",
-    "fixVersions",
-    "description",
-]
-
-DEFAULT_HEADERS = [
-    "Key",
-    "Summary",
-    "Status",
-    "Type",
-    "Priority",
-    "Assignee",
-    "Reporter",
-    "Created",
-    "Updated",
-    "Labels",
-    "Components",
-    "Fix Versions",
-    "Description",
-]
-
 # Fields treated as plain date strings (truncate to YYYY-MM-DD)
 DATE_FIELDS = {"created", "updated", "duedate", "resolutiondate"}
 
@@ -202,14 +169,18 @@ def main() -> None:
 
     client = connect_jira()
 
-    # Resolve columns: use filter's custom config, or fall back to defaults
+    # Resolve columns: use filter's custom config, or warn and export KEY only
     columns = get_filter_columns(client, args.filter_id)
     if columns:
         field_ids = [col["value"] for col in columns]
         headers = [col["label"] for col in columns]
     else:
-        field_ids = DEFAULT_FIELD_IDS
-        headers = DEFAULT_HEADERS
+        print(
+            "[WARN] The filter has no column configuration. "
+            "Only the 'Key' field will be written to the CSV."
+        )
+        field_ids = ["issuekey"]
+        headers = ["Key"]
 
     # "issuekey" is always returned by the API; don't request it as a field
     fields_to_fetch = [fid for fid in field_ids if fid != "issuekey"]
