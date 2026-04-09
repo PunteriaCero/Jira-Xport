@@ -104,24 +104,14 @@ def _extract(field_id: str, issue: dict) -> str:
     return str(value).replace("\n", " ").replace("\r", "")
 
 
-def get_issues_from_filter(client: JIRA, filter_id: str, fields: list[str]) -> list:
-    jql = f"filter={filter_id}"
+def _paginate_jql(client: JIRA, jql: str, fields_to_request: list[str]) -> list:
+    """Fetches all issues matching a JQL query using cursor-based pagination."""
     issues = []
     next_page_token = None
     url = f"{client._options['server']}/rest/api/3/search/jql"
-    # issuekey is always returned by the API; requesting it explicitly is unnecessary
-    fields_to_request = [f for f in fields if f != "issuekey"]
-    # parent must always be fetched to populate the Parent Key column
-    if "parent" not in fields_to_request:
-        fields_to_request.append("parent")
-
-    print(f"[INFO] Fetching issues for filter ID {filter_id}...")
 
     while True:
-        payload: dict = {
-            "jql": jql,
-            "maxResults": PAGE_SIZE,
-        }
+        payload: dict = {"jql": jql, "maxResults": PAGE_SIZE}
         if fields_to_request:
             payload["fields"] = fields_to_request
         if next_page_token:
@@ -146,12 +136,48 @@ def get_issues_from_filter(client: JIRA, filter_id: str, fields: list[str]) -> l
             break
 
         issues.extend(batch)
-        print(f"[INFO] Retrieved {len(issues)} issues...")
 
         if is_last or not next_page_token:
             break
 
     return issues
+
+
+def get_issues_from_filter(client: JIRA, filter_id: str, fields: list[str]) -> list:
+    fields_to_request = [f for f in fields if f != "issuekey"]
+    if "parent" not in fields_to_request:
+        fields_to_request.append("parent")
+
+    print(f"[INFO] Fetching issues for filter ID {filter_id}...")
+    issues = _paginate_jql(client, f"filter={filter_id}", fields_to_request)
+    print(f"[INFO] Retrieved {len(issues)} issue(s).")
+    return issues
+
+
+def fetch_subtasks(client: JIRA, parent_keys: list[str], labels: list[str], fields: list[str]) -> list:
+    if not parent_keys:
+        return []
+
+    fields_to_request = [f for f in fields if f != "issuekey"]
+    if "parent" not in fields_to_request:
+        fields_to_request.append("parent")
+
+    label_desc = f" with labels [{', '.join(labels)}]" if labels else ""
+    print(f"[INFO] Fetching subtasks{label_desc}...")
+
+    all_subtasks = []
+    chunk_size = 50  # keep JQL length manageable
+    for i in range(0, len(parent_keys), chunk_size):
+        chunk = parent_keys[i:i + chunk_size]
+        keys_jql = ", ".join(chunk)
+        jql = f"parent in ({keys_jql})"
+        if labels:
+            labels_jql = ", ".join(f'"{lbl}"' for lbl in labels)
+            jql += f" AND labels in ({labels_jql})"
+        all_subtasks.extend(_paginate_jql(client, jql, fields_to_request))
+
+    print(f"[INFO] Retrieved {len(all_subtasks)} subtask(s).")
+    return all_subtasks
 
 
 def export_to_csv(
@@ -191,6 +217,18 @@ def main() -> None:
         default=None,
         help="Output CSV file path (default: output/jira_filter_<id>_<timestamp>.csv)",
     )
+    parser.add_argument(
+        "--subtasks",
+        nargs="?",
+        const="",
+        default=None,
+        metavar="LABELS",
+        help=(
+            "Include subtasks of each issue. Optionally provide a comma-separated list "
+            "of labels to filter subtasks (e.g. --subtasks label1,label2). "
+            "If no labels are given, all subtasks are included."
+        ),
+    )
     args = parser.parse_args()
 
     if not args.filter_id.isdigit():
@@ -218,6 +256,12 @@ def main() -> None:
         headers.insert(0, "Parent Key")
 
     issues = get_issues_from_filter(client, args.filter_id, field_ids)
+
+    if args.subtasks is not None:
+        labels = [lbl.strip() for lbl in args.subtasks.split(",") if lbl.strip()]
+        parent_keys = [issue["key"] for issue in issues]
+        subtasks = fetch_subtasks(client, parent_keys, labels, field_ids)
+        issues.extend(subtasks)
 
     if not issues:
         print("[WARN] No issues found for the given filter.")
