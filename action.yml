@@ -80,6 +80,6 @@ runs:
         if [ -n "$INPUT_OUTPUT" ]; then
           echo "csv_path=$INPUT_OUTPUT" >> "$GITHUB_OUTPUT"
         else
-          CSV=$(ls -t jira_filter_${INPUT_FILTER_ID}_*.csv 2>/dev/null | head -1)
+          CSV=$(ls -t output/jira_filter_${INPUT_FILTER_ID}_*.csv 2>/dev/null | head -1 || true)
           echo "csv_path=${CSV}" >> "$GITHUB_OUTPUT"
         fi
