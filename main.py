@@ -51,75 +51,98 @@ def get_filter_columns(client: JIRA, filter_id: str) -> list[dict] | None:
     Each item: {"label": str, "value": str}  (value = Jira field ID).
     Returns None when the filter has no custom column configuration.
     """
+    url = f"{client._options['server']}/rest/api/3/filter/{filter_id}/columns"
     try:
-        columns = client._get_json(f"filter/{filter_id}/columns")
-        if columns:
-            print(f"[INFO] Filter has {len(columns)} custom column(s).")
-            return columns
-        print("[INFO] Filter has no custom column configuration — using defaults.")
+        response = client._session.get(url, headers={"Accept": "application/json"})
+        if response.status_code == 200:
+            columns = response.json()
+            if columns:
+                print(f"[INFO] Filter has {len(columns)} custom column(s).")
+                return columns
+            print("[INFO] Filter has no custom column configuration.")
+            return None
+        print(f"[WARN] Could not retrieve filter columns ({response.status_code}): no column config found.")
         return None
-    except JIRAError as e:
-        print(f"[WARN] Could not retrieve filter columns ({e.status_code}): using defaults.")
+    except Exception as e:
+        print(f"[WARN] Could not retrieve filter columns: {e}")
         return None
 
 
-def _extract(field_id: str, issue) -> str:
-    """Dynamically extract a field value from a Jira issue by field ID."""
+def _extract(field_id: str, issue: dict) -> str:
+    """Dynamically extract a field value from a raw Jira API issue dict."""
     if field_id == "issuekey":
-        return issue.key
+        return issue.get("key", "")
 
-    value = getattr(issue.fields, field_id, None)
+    value = issue.get("fields", {}).get(field_id)
     if value is None:
         return ""
 
-    # List fields (labels → list[str], components/fixVersions → list[obj])
+    # List fields (labels → list[str], components/fixVersions → list[dict])
     if isinstance(value, list):
-        return "; ".join(str(getattr(item, "name", item)) for item in value)
+        parts = [
+            item.get("name", str(item)) if isinstance(item, dict) else str(item)
+            for item in value
+        ]
+        return "; ".join(parts)
 
     # Date fields
     if field_id in DATE_FIELDS:
         return str(value)[:10]
 
-    # Object fields: prefer displayName, then name, then value
-    for attr in ("displayName", "name", "value"):
-        candidate = getattr(value, attr, None)
-        if candidate is not None:
-            return str(candidate)
+    # Object fields (dict): prefer displayName, then name, then value
+    if isinstance(value, dict):
+        for attr in ("displayName", "name", "value"):
+            if attr in value:
+                return str(value[attr])
+        return str(value)
 
-    # Plain string / fallback
+    # Plain string / number fallback
     return str(value).replace("\n", " ").replace("\r", "")
 
 
 def get_issues_from_filter(client: JIRA, filter_id: str, fields: list[str]) -> list:
     jql = f"filter={filter_id}"
     issues = []
-    start = 0
+    next_page_token = None
+    url = f"{client._options['server']}/rest/api/3/search/jql"
+    # issuekey is always returned by the API; requesting it explicitly is unnecessary
+    fields_to_request = [f for f in fields if f != "issuekey"]
 
     print(f"[INFO] Fetching issues for filter ID {filter_id}...")
 
     while True:
+        payload: dict = {
+            "jql": jql,
+            "maxResults": PAGE_SIZE,
+        }
+        if fields_to_request:
+            payload["fields"] = fields_to_request
+        if next_page_token:
+            payload["nextPageToken"] = next_page_token
         try:
-            batch = client.search_issues(
-                jql,
-                startAt=start,
-                maxResults=PAGE_SIZE,
-                fields=",".join(fields),
+            response = client._session.post(
+                url,
+                json=payload,
+                headers={"Accept": "application/json", "Content-Type": "application/json"},
             )
-        except JIRAError as e:
-            print(f"[ERROR] Failed to fetch issues: {e.text}")
+            response.raise_for_status()
+        except Exception as e:
+            print(f"[ERROR] Failed to fetch issues: {e}")
             sys.exit(1)
+
+        data = response.json()
+        batch = data.get("issues", [])
+        is_last = data.get("isLast", True)
+        next_page_token = data.get("nextPageToken")
 
         if not batch:
             break
 
         issues.extend(batch)
-        total = batch.total
-        print(f"[INFO] Retrieved {len(issues)} / {total} issues...")
+        print(f"[INFO] Retrieved {len(issues)} issues...")
 
-        if len(batch) < PAGE_SIZE:
+        if is_last or not next_page_token:
             break
-
-        start += PAGE_SIZE
 
     return issues
 
@@ -182,10 +205,7 @@ def main() -> None:
         field_ids = ["issuekey"]
         headers = ["Key"]
 
-    # "issuekey" is always returned by the API; don't request it as a field
-    fields_to_fetch = [fid for fid in field_ids if fid != "issuekey"]
-
-    issues = get_issues_from_filter(client, args.filter_id, fields_to_fetch)
+    issues = get_issues_from_filter(client, args.filter_id, field_ids)
 
     if not issues:
         print("[WARN] No issues found for the given filter.")
