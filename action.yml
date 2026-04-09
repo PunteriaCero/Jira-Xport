@@ -1,0 +1,73 @@
+name: 'Jira Xport'
+description: 'Export all tickets from a Jira filter to a CSV file using the filter configured columns.'
+branding:
+  icon: 'download'
+  color: 'blue'
+
+inputs:
+  filter_id:
+    description: 'Jira filter ID (numeric)'
+    required: true
+  jira_url:
+    description: 'Jira instance URL (e.g. https://yourorg.atlassian.net)'
+    required: true
+  jira_email:
+    description: 'Jira user email address'
+    required: true
+  jira_api_token:
+    description: 'Jira API token'
+    required: true
+  output:
+    description: 'Output CSV filename placed inside the output/ folder. Defaults to jira_filter_<id>_<timestamp>.csv'
+    required: false
+    default: ''
+  include_subtasks:
+    description: 'Set to "true" to include subtasks of each issue'
+    required: false
+    default: 'false'
+  subtasks_labels:
+    description: 'Comma-separated list of labels to filter subtasks (only used when include_subtasks is "true"). Leave empty to include all subtasks.'
+    required: false
+    default: ''
+
+outputs:
+  output_dir:
+    description: 'Directory containing the generated CSV file(s)'
+    value: ${{ github.workspace }}/output
+
+runs:
+  using: composite
+  steps:
+    - name: Build jira-xport image
+      shell: bash
+      run: docker build -t jira-xport "${{ github.action_path }}"
+
+    - name: Run jira-xport
+      shell: bash
+      env:
+        JIRA_URL: ${{ inputs.jira_url }}
+        JIRA_EMAIL: ${{ inputs.jira_email }}
+        JIRA_API_TOKEN: ${{ inputs.jira_api_token }}
+      run: |
+        mkdir -p "${{ github.workspace }}/output"
+
+        ARGS="${{ inputs.filter_id }}"
+
+        if [ -n "${{ inputs.output }}" ]; then
+          ARGS="$ARGS -o /app/output/${{ inputs.output }}"
+        fi
+
+        if [ "${{ inputs.include_subtasks }}" = "true" ]; then
+          if [ -n "${{ inputs.subtasks_labels }}" ]; then
+            ARGS="$ARGS --subtasks ${{ inputs.subtasks_labels }}"
+          else
+            ARGS="$ARGS --subtasks"
+          fi
+        fi
+
+        docker run --rm \
+          -e JIRA_URL \
+          -e JIRA_EMAIL \
+          -e JIRA_API_TOKEN \
+          -v "${{ github.workspace }}/output:/app/output" \
+          jira-xport $ARGS
