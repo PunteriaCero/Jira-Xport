@@ -212,10 +212,10 @@ def main() -> None:
         field_ids = ["issuekey"]
         headers = ["Key"]
 
-    # Parent Key column is always included regardless of filter configuration
+    # Parent Key column is always the first column regardless of filter configuration
     if "parent" not in field_ids:
-        field_ids.append("parent")
-        headers.append("Parent Key")
+        field_ids.insert(0, "parent")
+        headers.insert(0, "Parent Key")
 
     issues = get_issues_from_filter(client, args.filter_id, field_ids)
 
