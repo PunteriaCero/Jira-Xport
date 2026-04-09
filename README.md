@@ -79,7 +79,7 @@ jobs:
 
       - id: export
         name: Export Jira filter
-        uses: your-org/jira-xport@v1
+        uses: PunteriaCero/jira-xport@v1
         with:
           filter_id: '12345'
           jira_url: ${{ secrets.JIRA_URL }}
@@ -97,7 +97,7 @@ jobs:
 
 ```yaml
       - name: Export Jira filter with subtasks
-        uses: your-org/jira-xport@v1
+        uses: PunteriaCero/jira-xport@v1
         with:
           filter_id: '12345'
           jira_url: ${{ secrets.JIRA_URL }}
