@@ -1,0 +1,10 @@
+services:
+  jira-xport:
+    build: .
+    env_file:
+      - .env
+    volumes:
+      # CSVs will appear in ./output on the host
+      - ./output:/app/output
+    # Override at runtime: docker compose run jira-xport <filter_id>
+    # e.g.: docker compose run --rm jira-xport 12345
