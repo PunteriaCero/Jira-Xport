@@ -14,7 +14,9 @@ JIRA_URL = os.getenv("JIRA_URL")
 JIRA_EMAIL = os.getenv("JIRA_EMAIL")
 JIRA_API_TOKEN = os.getenv("JIRA_API_TOKEN")
 
-FIELDS = [
+# Used when the filter has no custom column configuration
+DEFAULT_FIELD_IDS = [
+    "issuekey",
     "summary",
     "status",
     "issuetype",
@@ -29,7 +31,7 @@ FIELDS = [
     "description",
 ]
 
-CSV_HEADERS = [
+DEFAULT_HEADERS = [
     "Key",
     "Summary",
     "Status",
@@ -44,6 +46,9 @@ CSV_HEADERS = [
     "Fix Versions",
     "Description",
 ]
+
+# Fields treated as plain date strings (truncate to YYYY-MM-DD)
+DATE_FIELDS = {"created", "updated", "duedate", "resolutiondate"}
 
 PAGE_SIZE = 100
 
@@ -73,7 +78,52 @@ def connect_jira() -> JIRA:
         sys.exit(1)
 
 
-def get_issues_from_filter(client: JIRA, filter_id: str) -> list:
+def get_filter_columns(client: JIRA, filter_id: str) -> list[dict] | None:
+    """
+    Calls GET /rest/api/3/filter/{id}/columns and returns the column list.
+    Each item: {"label": str, "value": str}  (value = Jira field ID).
+    Returns None when the filter has no custom column configuration.
+    """
+    try:
+        columns = client._get_json(f"filter/{filter_id}/columns")
+        if columns:
+            print(f"[INFO] Filter has {len(columns)} custom column(s).")
+            return columns
+        print("[INFO] Filter has no custom column configuration — using defaults.")
+        return None
+    except JIRAError as e:
+        print(f"[WARN] Could not retrieve filter columns ({e.status_code}): using defaults.")
+        return None
+
+
+def _extract(field_id: str, issue) -> str:
+    """Dynamically extract a field value from a Jira issue by field ID."""
+    if field_id == "issuekey":
+        return issue.key
+
+    value = getattr(issue.fields, field_id, None)
+    if value is None:
+        return ""
+
+    # List fields (labels → list[str], components/fixVersions → list[obj])
+    if isinstance(value, list):
+        return "; ".join(str(getattr(item, "name", item)) for item in value)
+
+    # Date fields
+    if field_id in DATE_FIELDS:
+        return str(value)[:10]
+
+    # Object fields: prefer displayName, then name, then value
+    for attr in ("displayName", "name", "value"):
+        candidate = getattr(value, attr, None)
+        if candidate is not None:
+            return str(candidate)
+
+    # Plain string / fallback
+    return str(value).replace("\n", " ").replace("\r", "")
+
+
+def get_issues_from_filter(client: JIRA, filter_id: str, fields: list[str]) -> list:
     jql = f"filter={filter_id}"
     issues = []
     start = 0
@@ -86,7 +136,7 @@ def get_issues_from_filter(client: JIRA, filter_id: str) -> list:
                 jql,
                 startAt=start,
                 maxResults=PAGE_SIZE,
-                fields=",".join(FIELDS),
+                fields=",".join(fields),
             )
         except JIRAError as e:
             print(f"[ERROR] Failed to fetch issues: {e.text}")
@@ -107,42 +157,19 @@ def get_issues_from_filter(client: JIRA, filter_id: str) -> list:
     return issues
 
 
-def _extract(value) -> str:
-    """Convert a Jira field value to a plain string."""
-    if value is None:
-        return ""
-    if isinstance(value, list):
-        return "; ".join(str(getattr(item, "name", item)) for item in value)
-    return str(getattr(value, "name", value))
-
-
-def issue_to_row(issue) -> list:
-    f = issue.fields
-    return [
-        issue.key,
-        getattr(f, "summary", "") or "",
-        _extract(f.status),
-        _extract(f.issuetype),
-        _extract(f.priority),
-        _extract(f.assignee),
-        _extract(f.reporter),
-        (f.created or "")[:10],
-        (f.updated or "")[:10],
-        _extract(f.labels),
-        _extract(f.components),
-        _extract(f.fixVersions),
-        (getattr(f, "description", "") or "").replace("\n", " ").replace("\r", ""),
-    ]
-
-
-def export_to_csv(issues: list, output_path: str) -> None:
+def export_to_csv(
+    issues: list,
+    headers: list[str],
+    field_ids: list[str],
+    output_path: str,
+) -> None:
     os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
 
     with open(output_path, "w", newline="", encoding="utf-8") as fh:
         writer = csv.writer(fh)
-        writer.writerow(CSV_HEADERS)
+        writer.writerow(headers)
         for issue in issues:
-            writer.writerow(issue_to_row(issue))
+            writer.writerow([_extract(fid, issue) for fid in field_ids])
 
     print(f"[OK] Exported {len(issues)} issues → {output_path}")
 
@@ -174,14 +201,27 @@ def main() -> None:
         sys.exit(1)
 
     client = connect_jira()
-    issues = get_issues_from_filter(client, args.filter_id)
+
+    # Resolve columns: use filter's custom config, or fall back to defaults
+    columns = get_filter_columns(client, args.filter_id)
+    if columns:
+        field_ids = [col["value"] for col in columns]
+        headers = [col["label"] for col in columns]
+    else:
+        field_ids = DEFAULT_FIELD_IDS
+        headers = DEFAULT_HEADERS
+
+    # "issuekey" is always returned by the API; don't request it as a field
+    fields_to_fetch = [fid for fid in field_ids if fid != "issuekey"]
+
+    issues = get_issues_from_filter(client, args.filter_id, fields_to_fetch)
 
     if not issues:
         print("[WARN] No issues found for the given filter.")
         sys.exit(0)
 
     output_path = build_output_path(args.filter_id, args.output)
-    export_to_csv(issues, output_path)
+    export_to_csv(issues, headers, field_ids, output_path)
 
 
 if __name__ == "__main__":
