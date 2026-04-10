@@ -17,6 +17,16 @@ JIRA_API_TOKEN = os.getenv("JIRA_API_TOKEN")
 # Fields treated as plain date strings (truncate to YYYY-MM-DD)
 DATE_FIELDS = {"created", "updated", "duedate", "resolutiondate"}
 
+# System time-tracking fields that store values in seconds (converted to hours on export)
+KNOWN_TIME_FIELDS = {
+    "timespent",
+    "timeoriginalestimate",
+    "timeestimate",
+    "aggregatetimespent",
+    "aggregatetimeoriginalestimate",
+    "aggregatetimeestimate",
+}
+
 PAGE_SIZE = 100
 
 
@@ -68,6 +78,34 @@ def get_filter_columns(client: JIRA, filter_id: str) -> list[dict] | None:
         return None
 
 
+def get_time_fields(client: JIRA) -> set[str]:
+    """
+    Calls GET /rest/api/3/field and returns the set of field IDs whose values
+    are stored as integer seconds (time-tracking fields).
+    Falls back to KNOWN_TIME_FIELDS if the request fails.
+    """
+    url = f"{client._options['server']}/rest/api/3/field"
+    try:
+        response = client._session.get(url, headers={"Accept": "application/json"})
+        if response.status_code == 200:
+            time_fields: set[str] = set()
+            for f in response.json():
+                schema = f.get("schema", {})
+                system = schema.get("system", "")
+                custom = schema.get("custom", "")
+                if system in KNOWN_TIME_FIELDS:
+                    time_fields.add(f["id"])
+                elif "duration" in custom:
+                    time_fields.add(f["id"])
+            if time_fields:
+                print(f"[INFO] Detected {len(time_fields)} time field(s): {sorted(time_fields)}")
+                return time_fields
+    except Exception as e:
+        print(f"[WARN] Could not retrieve field metadata: {e}")
+    print(f"[INFO] Using known system time fields as fallback.")
+    return set(KNOWN_TIME_FIELDS)
+
+
 def _is_epic(issue: dict) -> bool:
     name = issue.get("fields", {}).get("issuetype", {}).get("name", "").lower()
     return "epic" in name or "épica" in name or "epica" in name
@@ -77,7 +115,7 @@ def _is_subtask(issue: dict) -> bool:
     return bool(issue.get("fields", {}).get("issuetype", {}).get("subtask", False))
 
 
-def _extract(field_id: str, issue: dict, parent_lookup: dict[str, str] | None = None) -> str:
+def _extract(field_id: str, issue: dict, parent_lookup: dict[str, str] | None = None, time_fields: set[str] | None = None) -> str:
     """Dynamically extract a field value from a raw Jira API issue dict."""
     if field_id == "_epic_key":
         if _is_epic(issue):
@@ -127,6 +165,11 @@ def _extract(field_id: str, issue: dict, parent_lookup: dict[str, str] | None = 
             if attr in value:
                 return str(value[attr])
         return str(value)
+
+    # Time fields: stored as integer seconds → convert to hours
+    if time_fields and field_id in time_fields and isinstance(value, (int, float)):
+        hours = value / 3600
+        return f"{hours:.2f}".rstrip("0").rstrip(".")
 
     # Plain string / number fallback
     return str(value).replace("\n", " ").replace("\r", "")
@@ -218,6 +261,7 @@ def export_to_csv(
     field_ids: list[str],
     output_path: str,
     parent_lookup: dict[str, str] | None = None,
+    time_fields: set[str] | None = None,
 ) -> None:
     os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
 
@@ -225,7 +269,7 @@ def export_to_csv(
         writer = csv.writer(fh)
         writer.writerow(headers)
         for issue in issues:
-            writer.writerow([_extract(fid, issue, parent_lookup) for fid in field_ids])
+            writer.writerow([_extract(fid, issue, parent_lookup, time_fields) for fid in field_ids])
 
     print(f"[OK] Exported {len(issues)} issues → {output_path}")
 
@@ -269,6 +313,7 @@ def main() -> None:
         sys.exit(1)
 
     client = connect_jira()
+    time_fields = get_time_fields(client)
 
     # Resolve columns: use filter's custom config, or warn and export KEY only
     columns = get_filter_columns(client, args.filter_id)
@@ -313,7 +358,7 @@ def main() -> None:
             parent_lookup[issue["key"]] = parent.get("key", "")
 
     output_path = build_output_path(args.filter_id, args.output)
-    export_to_csv(issues, headers, field_ids, output_path, parent_lookup)
+    export_to_csv(issues, headers, field_ids, output_path, parent_lookup, time_fields)
 
 
 if __name__ == "__main__":
