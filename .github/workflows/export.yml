@@ -35,7 +35,19 @@ on:
 jobs:
   export:
     runs-on: ubuntu-latest
+    permissions:
+      actions: write
     steps:
+      - name: Delete previous workflow runs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh run list --repo "${{ github.repository }}" --workflow=export.yml \
+            --limit 100 --json databaseId --jq '.[].databaseId' \
+            | grep -v "^${{ github.run_id }}$" \
+            | xargs -r -I{} gh run delete {} --repo "${{ github.repository }}" 2>/dev/null || true
+        shell: bash
+
       - uses: actions/checkout@v4
 
       - id: export
