@@ -265,7 +265,8 @@ def main() -> None:
         labels = [lbl.strip() for lbl in args.subtasks.split(",") if lbl.strip()]
         parent_keys = [issue["key"] for issue in issues]
         subtasks = fetch_subtasks(client, parent_keys, labels, field_ids)
-        issues.extend(subtasks)
+        existing_keys = {issue["key"] for issue in issues}
+        issues.extend(s for s in subtasks if s["key"] not in existing_keys)
 
     if not issues:
         print("[WARN] No issues found for the given filter.")
