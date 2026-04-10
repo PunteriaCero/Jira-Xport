@@ -1,0 +1,64 @@
+name: Sprint Productivity Report
+
+on:
+  workflow_dispatch:
+    inputs:
+      jira_url:
+        description: 'Jira instance URL (e.g. https://yourorg.atlassian.net)'
+        required: true
+      jira_email:
+        description: 'Jira user email address'
+        required: true
+      jira_api_token:
+        description: 'Jira API token'
+        required: true
+      filter_id:
+        description: 'Jira filter ID (numeric)'
+        required: true
+      sprint_field:
+        description: 'Sprint custom field ID (leave empty for auto-detection)'
+        required: false
+        default: ''
+      sp_field:
+        description: 'Story points custom field ID (leave empty for auto-detection)'
+        required: false
+        default: ''
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: Delete previous workflow runs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh run list --repo "${{ github.repository }}" --workflow=sprint-report.yml \
+            --limit 100 --json databaseId --jq '.[].databaseId' \
+            | grep -v "^${{ github.run_id }}$" \
+            | xargs -r -I{} gh run delete {} --repo "${{ github.repository }}" 2>/dev/null || true
+        shell: bash
+
+      - uses: actions/checkout@v4
+
+      - id: report
+        name: Generate sprint productivity report
+        uses: PunteriaCero/jira-xport/actions/sprint-report@main
+        with:
+          filter_id: ${{ inputs.filter_id }}
+          jira_url: ${{ inputs.jira_url }}
+          jira_email: ${{ inputs.jira_email }}
+          jira_api_token: ${{ inputs.jira_api_token }}
+          sprint_field: ${{ inputs.sprint_field }}
+          sp_field: ${{ inputs.sp_field }}
+
+      - name: Upload report artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: sprint-report-${{ inputs.filter_id }}
+          path: |
+            ${{ steps.report.outputs.csv_path }}
+            ${{ steps.report.outputs.chart_path }}
+          if-no-files-found: error
+          retention-days: 1

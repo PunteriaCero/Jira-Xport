@@ -17,7 +17,7 @@ WORKDIR /app
 COPY --from=builder /install /usr/local
 
 # Copy application source
-COPY main.py .
+COPY main.py sprint_report.py .
 
 # Directory where CSVs will be written (mount a host volume here)
 RUN mkdir -p /app/output

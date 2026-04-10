@@ -1,0 +1,80 @@
+name: 'Jira Sprint Report'
+description: 'Generate a sprint productivity report (CSV + chart) from a Jira filter. Shows story points delivered, hours spent, and productivity per sprint.'
+author: 'hlavrencic'
+branding:
+  icon: 'bar-chart-2'
+  color: 'green'
+
+inputs:
+  filter_id:
+    description: 'Jira filter ID (numeric)'
+    required: true
+  jira_url:
+    description: 'Jira instance URL (e.g. https://yourorg.atlassian.net)'
+    required: true
+  jira_email:
+    description: 'Jira user email address'
+    required: true
+  jira_api_token:
+    description: 'Jira API token'
+    required: true
+  sprint_field:
+    description: 'Sprint custom field ID (auto-detected if omitted)'
+    required: false
+    default: ''
+  sp_field:
+    description: 'Story points custom field ID (auto-detected if omitted)'
+    required: false
+    default: ''
+  output:
+    description: 'Output directory for the CSV and chart (default: output/)'
+    required: false
+    default: ''
+
+outputs:
+  csv_path:
+    description: 'Path to the generated CSV report'
+    value: ${{ steps.report.outputs.csv_path }}
+  chart_path:
+    description: 'Path to the generated PNG chart'
+    value: ${{ steps.report.outputs.chart_path }}
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+
+    - name: Install dependencies
+      shell: bash
+      run: pip install -r "${{ github.action_path }}/../../requirements.txt"
+
+    - name: Generate sprint report
+      id: report
+      shell: bash
+      env:
+        JIRA_URL: ${{ inputs.jira_url }}
+        JIRA_EMAIL: ${{ inputs.jira_email }}
+        JIRA_API_TOKEN: ${{ inputs.jira_api_token }}
+        INPUT_FILTER_ID: ${{ inputs.filter_id }}
+        INPUT_SPRINT_FIELD: ${{ inputs.sprint_field }}
+        INPUT_SP_FIELD: ${{ inputs.sp_field }}
+        INPUT_OUTPUT: ${{ inputs.output }}
+      run: |
+        ARGS="$INPUT_FILTER_ID"
+
+        if [ -n "$INPUT_SPRINT_FIELD" ]; then
+          ARGS="$ARGS --sprint-field $INPUT_SPRINT_FIELD"
+        fi
+
+        if [ -n "$INPUT_SP_FIELD" ]; then
+          ARGS="$ARGS --sp-field $INPUT_SP_FIELD"
+        fi
+
+        if [ -n "$INPUT_OUTPUT" ]; then
+          ARGS="$ARGS -o $INPUT_OUTPUT"
+        fi
+
+        python "${{ github.action_path }}/../../sprint_report.py" $ARGS
