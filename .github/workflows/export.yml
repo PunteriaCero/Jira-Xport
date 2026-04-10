@@ -52,7 +52,7 @@ jobs:
 
       - id: export
         name: Export Jira filter to CSV
-        uses: PunteriaCero/jira-xport@v1
+        uses: PunteriaCero/jira-xport@main
         with:
           filter_id: ${{ inputs.filter_id }}
           jira_url: ${{ inputs.jira_url }}
