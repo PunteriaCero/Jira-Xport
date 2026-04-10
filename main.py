@@ -283,11 +283,10 @@ def main() -> None:
         field_ids = ["issuekey"]
         headers = ["Key"]
 
-    # Remove "parent" from filter columns — hierarchy is captured by the 3 fixed columns
-    if "parent" in field_ids:
-        idx = field_ids.index("parent")
-        field_ids.pop(idx)
-        headers.pop(idx)
+    # Remove "parent" and "issuekey" from filter columns — covered by the 3 fixed hierarchy columns
+    REDUNDANT_FIELDS = {"parent", "issuekey"}
+    filtered = [(fid, h) for fid, h in zip(field_ids, headers) if fid not in REDUNDANT_FIELDS]
+    field_ids, headers = (list(x) for x in zip(*filtered)) if filtered else ([], [])
 
     # First 3 columns are always the hierarchy columns
     field_ids = ["_epic_key", "_issue_key", "_sub_key"] + field_ids
