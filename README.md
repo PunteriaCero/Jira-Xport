@@ -2,73 +2,47 @@
 
 Export all tickets from a Jira filter to a CSV file.
 
-Columns are taken directly from the filter's configured columns in Jira. A **Parent Key** column is always included as the first column. Optionally, subtasks of each issue can be fetched and appended to the output, with optional label filtering.
+The first three columns are always **EpicKey**, **IssueKey**, and **Sub-Key**, which map the 3-level hierarchy (Epic → Issue → Sub-task). The remaining columns follow the filter's configured column layout in Jira. Time-tracking fields (e.g. time spent, original estimate) are automatically converted from seconds to hours.
 
 ---
 
-## Requirements
+## Run with GitHub Actions (this repo)
 
-- Docker
-- A Jira Cloud account with an [API token](https://id.atlassian.com/manage-profile/security/api-tokens)
+The easiest way to use this tool is through the included workflow. Go to **Actions → Export Jira Filter → Run workflow** and fill in the parameters:
+
+| Input | Description | Required |
+|---|---|---|
+| `jira_url` | Jira instance URL (e.g. `https://yourorg.atlassian.net`) | Yes |
+| `jira_email` | Jira user email address | Yes |
+| `jira_api_token` | Jira [API token](https://id.atlassian.com/manage-profile/security/api-tokens) | Yes |
+| `filter_id` | Jira filter ID (numeric) | Yes |
+| `include_subtasks` | `true` to fetch and append subtasks | No |
+| `subtasks_labels` | Comma-separated labels to restrict which subtasks are included | No |
+| `output` | Custom output filename (leave empty for auto-generated) | No |
+
+The CSV is uploaded as an artifact named `jira-export-<filter_id>` and kept for **1 day**. Only the latest run is retained — previous runs are deleted automatically on each execution.
 
 ---
 
-## Configuration
+## Sample output
 
-Copy `.env.example` to `.env` and fill in your credentials:
-
-```env
-JIRA_URL=https://yourorg.atlassian.net
-JIRA_EMAIL=your@email.com
-JIRA_API_TOKEN=your_api_token
+```
+EpicKey,IssueKey,Sub-Key,Tipo de Incidencia,Resumen,Estado,Persona asignada,Σ Estimación original,Σ Tiempo empleado
+CMZ100-32217,CMZ100-33753,,Historia,Creacion de Tablas de Maestros,Pendiente,Jose Luis Rodriguez,8,
+,CMZ100-33740,,Historia,Integrar Logo Personal Pay,Hecho,Agustin Kloberdanz,5,5.5
+CMZ100-27106,CMZ100-33731,,Tarea,Reporte - Añadir Codigo,Finalizado,Mateo Codesido,1,0.5
+CMZ100-27106,CMZ100-33725,,Historia,Alta reclamo - Registrar IDs,Verificado,Mateo Codesido,12,6
+CMZ100-16620,,CMZ100-33800,Sub-Tarea,Subtask example,En Progreso,Ana García,2,1.5
 ```
 
----
-
-## Usage
-
-### Docker
-
-```bash
-# Build
-docker build -t jira-xport .
-
-# Export filter 12345
-docker run --rm --env-file .env -v $(pwd)/output:/app/output jira-xport 12345
-
-# Include all subtasks
-docker run --rm --env-file .env -v $(pwd)/output:/app/output jira-xport 12345 --subtasks
-
-# Include only subtasks that have at least one of the given labels
-docker run --rm --env-file .env -v $(pwd)/output:/app/output jira-xport 12345 --subtasks "backend,urgent"
-
-# Custom output filename
-docker run --rm --env-file .env -v $(pwd)/output:/app/output jira-xport 12345 -o /app/output/my_export.csv
-```
-
-### Docker Compose
-
-```bash
-docker compose run --rm jira-xport 12345
-```
+- **EpicKey** — key of the Epic the issue belongs to (empty if the issue is an Epic itself)
+- **IssueKey** — key of the Story/Task/Bug (empty for Epics and Sub-tasks)
+- **Sub-Key** — key of the Sub-task (empty for Epics and Stories)
+- Time columns (e.g. `Σ Estimación original`, `Σ Tiempo empleado`) are in **hours**
 
 ---
 
-## Parameters
-
-| Parameter | Description | Required | Default |
-|---|---|---|---|
-| `filter_id` | Jira filter ID (numeric, positional) | Yes | — |
-| `-o / --output` | Output CSV file path | No | `output/jira_filter_<id>_<timestamp>.csv` |
-| `--subtasks [LABELS]` | Include subtasks. Optionally provide comma-separated labels to restrict which subtasks are included. | No | — |
-
----
-
-## GitHub Actions
-
-Add `jira-xport` to any workflow to export a Jira filter and upload the CSV as an artifact.
-
-### Basic example
+## Use as a GitHub Action in another repo
 
 ```yaml
 jobs:
@@ -78,25 +52,6 @@ jobs:
       - uses: actions/checkout@v4
 
       - id: export
-        name: Export Jira filter
-        uses: PunteriaCero/jira-xport@v1
-        with:
-          filter_id: '12345'
-          jira_url: ${{ secrets.JIRA_URL }}
-          jira_email: ${{ secrets.JIRA_EMAIL }}
-          jira_api_token: ${{ secrets.JIRA_API_TOKEN }}
-
-      - name: Upload CSV
-        uses: actions/upload-artifact@v4
-        with:
-          name: jira-export
-          path: ${{ steps.export.outputs.csv_path }}
-```
-
-### With subtasks
-
-```yaml
-      - name: Export Jira filter with subtasks
         uses: PunteriaCero/jira-xport@v1
         with:
           filter_id: '12345'
@@ -105,30 +60,27 @@ jobs:
           jira_api_token: ${{ secrets.JIRA_API_TOKEN }}
           include_subtasks: 'true'
           subtasks_labels: 'backend,urgent'   # omit to include all subtasks
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: jira-export
+          path: ${{ steps.export.outputs.csv_path }}
 ```
-
-### Action inputs
-
-| Input | Description | Required | Default |
-|---|---|---|---|
-| `filter_id` | Jira filter ID (numeric) | Yes | — |
-| `jira_url` | Jira instance URL | Yes | — |
-| `jira_email` | Jira user email | Yes | — |
-| `jira_api_token` | Jira API token | Yes | — |
-| `output` | Output CSV file path (relative to workspace) | No | auto-generated |
-| `include_subtasks` | `"true"` to include subtasks | No | `"false"` |
-| `subtasks_labels` | Comma-separated labels to filter subtasks | No | _(all subtasks)_ |
-
-### Action outputs
-
-| Output | Description |
-|---|---|
-| `csv_path` | Path to the generated CSV file (relative to workspace) |
 
 ---
 
-## Output
+## Run locally with Docker
 
-The CSV filename defaults to `jira_filter_<filter_id>_<timestamp>.csv` and is written to the current directory.
+```bash
+# Build
+docker build -t jira-xport .
 
-The first column is always **Parent Key** (the key of the parent issue, or `-` if none). Remaining columns follow the filter's configured column layout. When a filter has no custom column configuration, only **Parent Key** and **Key** are exported and a warning is printed to the console.
+# Export filter 12345 (credentials in .env — copy from .env.example)
+docker run --rm --env-file .env -v $(pwd)/output:/app/output jira-xport 12345
+
+# Include all subtasks
+docker run --rm --env-file .env -v $(pwd)/output:/app/output jira-xport 12345 --subtasks
+
+# Include only subtasks with specific labels
+docker run --rm --env-file .env -v $(pwd)/output:/app/output jira-xport 12345 --subtasks "backend,urgent"
+```
