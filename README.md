@@ -27,12 +27,12 @@ The CSV is uploaded as an artifact named `jira-export-<filter_id>` and kept for 
 ## Sample output
 
 ```
-EpicKey,IssueKey,Sub-Key,Tipo de Incidencia,Resumen,Estado,Persona asignada,Σ Estimación original,Σ Tiempo empleado
-CMZ100-32217,CMZ100-33753,,Historia,Creacion de Tablas de Maestros,Pendiente,Jose Luis Rodriguez,8,
-,CMZ100-33740,,Historia,Integrar Logo Personal Pay,Hecho,Agustin Kloberdanz,5,5.5
-CMZ100-27106,CMZ100-33731,,Tarea,Reporte - Añadir Codigo,Finalizado,Mateo Codesido,1,0.5
-CMZ100-27106,CMZ100-33725,,Historia,Alta reclamo - Registrar IDs,Verificado,Mateo Codesido,12,6
-CMZ100-16620,,CMZ100-33800,Sub-Tarea,Subtask example,En Progreso,Ana García,2,1.5
+EpicKey,IssueKey,Sub-Key,Type,Summary,Status,Assignee,Original Estimate,Time Spent
+DEMO-100,DEMO-201,,Story,Build login page,In Progress,Alice Smith,8,3.5
+DEMO-100,DEMO-202,,Story,Integrate payment gateway,Done,Bob Jones,5,5
+DEMO-100,,DEMO-301,Sub-task,Write unit tests for login,Done,Alice Smith,2,1.5
+DEMO-100,,DEMO-302,Sub-task,Fix redirect after login,In Review,Carol White,1,0.5
+DEMO-105,DEMO-210,,Task,Update API documentation,To Do,,,
 ```
 
 - **EpicKey** — key of the Epic the issue belongs to (empty if the issue is an Epic itself)
