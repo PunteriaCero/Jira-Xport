@@ -68,8 +68,36 @@ def get_filter_columns(client: JIRA, filter_id: str) -> list[dict] | None:
         return None
 
 
-def _extract(field_id: str, issue: dict) -> str:
+def _is_epic(issue: dict) -> bool:
+    name = issue.get("fields", {}).get("issuetype", {}).get("name", "").lower()
+    return "epic" in name or "épica" in name or "epica" in name
+
+
+def _is_subtask(issue: dict) -> bool:
+    return bool(issue.get("fields", {}).get("issuetype", {}).get("subtask", False))
+
+
+def _extract(field_id: str, issue: dict, parent_lookup: dict[str, str] | None = None) -> str:
     """Dynamically extract a field value from a raw Jira API issue dict."""
+    if field_id == "_epic_key":
+        if _is_epic(issue):
+            return issue.get("key", "")
+        parent_key = (issue.get("fields", {}).get("parent") or {}).get("key", "")
+        if _is_subtask(issue):
+            # grandparent: look up the parent issue's own parent (epic)
+            return (parent_lookup or {}).get(parent_key, "")
+        return parent_key
+
+    if field_id == "_issue_key":
+        if _is_epic(issue):
+            return ""
+        if _is_subtask(issue):
+            return (issue.get("fields", {}).get("parent") or {}).get("key", "")
+        return issue.get("key", "")
+
+    if field_id == "_sub_key":
+        return issue.get("key", "") if _is_subtask(issue) else ""
+
     if field_id == "issuekey":
         return issue.get("key", "")
 
@@ -144,9 +172,11 @@ def _paginate_jql(client: JIRA, jql: str, fields_to_request: list[str]) -> list:
 
 
 def get_issues_from_filter(client: JIRA, filter_id: str, fields: list[str]) -> list:
-    fields_to_request = [f for f in fields if f != "issuekey"]
+    fields_to_request = [f for f in fields if f != "issuekey" and not f.startswith("_")]
     if "parent" not in fields_to_request:
         fields_to_request.append("parent")
+    if "issuetype" not in fields_to_request:
+        fields_to_request.append("issuetype")
 
     print(f"[INFO] Fetching issues for filter ID {filter_id}...")
     issues = _paginate_jql(client, f"filter={filter_id}", fields_to_request)
@@ -158,9 +188,11 @@ def fetch_subtasks(client: JIRA, parent_keys: list[str], labels: list[str], fiel
     if not parent_keys:
         return []
 
-    fields_to_request = [f for f in fields if f != "issuekey"]
+    fields_to_request = [f for f in fields if f != "issuekey" and not f.startswith("_")]
     if "parent" not in fields_to_request:
         fields_to_request.append("parent")
+    if "issuetype" not in fields_to_request:
+        fields_to_request.append("issuetype")
 
     label_desc = f" with labels [{', '.join(labels)}]" if labels else ""
     print(f"[INFO] Fetching subtasks{label_desc}...")
@@ -185,6 +217,7 @@ def export_to_csv(
     headers: list[str],
     field_ids: list[str],
     output_path: str,
+    parent_lookup: dict[str, str] | None = None,
 ) -> None:
     os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
 
@@ -192,7 +225,7 @@ def export_to_csv(
         writer = csv.writer(fh)
         writer.writerow(headers)
         for issue in issues:
-            writer.writerow([_extract(fid, issue) for fid in field_ids])
+            writer.writerow([_extract(fid, issue, parent_lookup) for fid in field_ids])
 
     print(f"[OK] Exported {len(issues)} issues → {output_path}")
 
@@ -250,14 +283,15 @@ def main() -> None:
         field_ids = ["issuekey"]
         headers = ["Key"]
 
-    # Parent Key column is always the first column regardless of filter configuration
+    # Remove "parent" from filter columns — hierarchy is captured by the 3 fixed columns
     if "parent" in field_ids:
         idx = field_ids.index("parent")
-        field_ids.insert(0, field_ids.pop(idx))
-        headers.insert(0, headers.pop(idx))
-    else:
-        field_ids.insert(0, "parent")
-        headers.insert(0, "Parent Key")
+        field_ids.pop(idx)
+        headers.pop(idx)
+
+    # First 3 columns are always the hierarchy columns
+    field_ids = ["_epic_key", "_issue_key", "_sub_key"] + field_ids
+    headers = ["EpicKey", "IssueKey", "Sub-Key"] + headers
 
     issues = get_issues_from_filter(client, args.filter_id, field_ids)
 
@@ -272,8 +306,15 @@ def main() -> None:
         print("[WARN] No issues found for the given filter.")
         sys.exit(0)
 
+    # Build parent lookup for subtask epic resolution: issue_key → parent_key
+    parent_lookup: dict[str, str] = {}
+    for issue in issues:
+        parent = issue.get("fields", {}).get("parent")
+        if parent:
+            parent_lookup[issue["key"]] = parent.get("key", "")
+
     output_path = build_output_path(args.filter_id, args.output)
-    export_to_csv(issues, headers, field_ids, output_path)
+    export_to_csv(issues, headers, field_ids, output_path, parent_lookup)
 
 
 if __name__ == "__main__":
