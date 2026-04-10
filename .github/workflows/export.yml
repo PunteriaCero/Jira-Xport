@@ -3,6 +3,15 @@ name: Export Jira Filter
 on:
   workflow_dispatch:
     inputs:
+      jira_url:
+        description: 'Jira instance URL (e.g. https://yourorg.atlassian.net)'
+        required: true
+      jira_email:
+        description: 'Jira user email address'
+        required: true
+      jira_api_token:
+        description: 'Jira API token'
+        required: true
       filter_id:
         description: 'Jira filter ID (numeric)'
         required: true
@@ -34,9 +43,9 @@ jobs:
         uses: PunteriaCero/jira-xport@v1
         with:
           filter_id: ${{ inputs.filter_id }}
-          jira_url: ${{ secrets.JIRA_URL }}
-          jira_email: ${{ secrets.JIRA_EMAIL }}
-          jira_api_token: ${{ secrets.JIRA_API_TOKEN }}
+          jira_url: ${{ inputs.jira_url }}
+          jira_email: ${{ inputs.jira_email }}
+          jira_api_token: ${{ inputs.jira_api_token }}
           output: ${{ inputs.output }}
           include_subtasks: ${{ inputs.include_subtasks }}
           subtasks_labels: ${{ inputs.subtasks_labels }}
