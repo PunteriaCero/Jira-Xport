@@ -76,13 +76,24 @@ def detect_sprint_field(field_map: dict) -> str | None:
 
 
 def detect_story_points_field(field_map: dict) -> str | None:
-    # Match by schema custom type first (most reliable)
+    # 1. Exact name match "story points" — most reliable, catches cf_10004 and cf_10016
     for fid, f in field_map.items():
-        custom = f.get("schema", {}).get("custom", "").lower()
-        if any(kw in custom for kw in ("story_points", "storypoints", "story-points")):
+        if f.get("name", "").lower() == "story points":
             print(f"[INFO] Story points field: {fid} ({f.get('name')})")
             return fid
-    # Fallback: match by field name
+    # 2. Schema custom type contains story_points / storypoints (underscore variants)
+    for fid, f in field_map.items():
+        custom = f.get("schema", {}).get("custom", "").lower()
+        if any(kw in custom for kw in ("story_points", "storypoints")):
+            print(f"[INFO] Story points field (by schema): {fid} ({f.get('name')})")
+            return fid
+    # 3. Schema custom contains story-points (hyphen, e.g. jsw-story-points)
+    for fid, f in field_map.items():
+        custom = f.get("schema", {}).get("custom", "").lower()
+        if "story-points" in custom:
+            print(f"[INFO] Story points field (by schema): {fid} ({f.get('name')})")
+            return fid
+    # 4. Name contains both "story" and "point"
     for fid, f in field_map.items():
         name = f.get("name", "").lower()
         if "story" in name and "point" in name:
