@@ -1,0 +1,49 @@
+name: Export Jira Filter
+
+on:
+  workflow_dispatch:
+    inputs:
+      filter_id:
+        description: 'Jira filter ID (numeric)'
+        required: true
+      include_subtasks:
+        description: 'Include subtasks'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
+      subtasks_labels:
+        description: 'Labels to filter subtasks (comma-separated, only used when include_subtasks is true)'
+        required: false
+        default: ''
+      output:
+        description: 'Output CSV filename (leave empty for auto-generated name)'
+        required: false
+        default: ''
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: export
+        name: Export Jira filter to CSV
+        uses: PunteriaCero/jira-xport@v1
+        with:
+          filter_id: ${{ inputs.filter_id }}
+          jira_url: ${{ secrets.JIRA_URL }}
+          jira_email: ${{ secrets.JIRA_EMAIL }}
+          jira_api_token: ${{ secrets.JIRA_API_TOKEN }}
+          output: ${{ inputs.output }}
+          include_subtasks: ${{ inputs.include_subtasks }}
+          subtasks_labels: ${{ inputs.subtasks_labels }}
+
+      - name: Upload CSV artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: jira-export-${{ inputs.filter_id }}
+          path: ${{ steps.export.outputs.csv_path }}
+          if-no-files-found: error
