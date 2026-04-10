@@ -143,28 +143,27 @@ def get_last_sprint(sprint_value) -> tuple[int, str] | None:
     return None
 
 
-def aggregate_by_sprint(
-    issues: list, sprint_field: str, sp_field: str
-) -> dict[int, dict]:
+def aggregate_by_week(issues: list, sp_field: str) -> dict[str, dict]:
     """
-    Group done issues by their last sprint.
-    Returns {sprint_id: {"name": str, "sp": float, "hours": float}}
+    Group done issues by the ISO week their resolution date falls in (YYYY-W##).
+    Returns {"YYYY-W##": {"sp": float, "hours": float}}
     """
-    data: dict[int, dict] = {}
+    data: dict[str, dict] = {}
     for issue in issues:
         fields = issue.get("fields", {})
 
-        # Only count delivered issues
         status_key = (
             fields.get("status", {}).get("statusCategory", {}).get("key", "")
         )
         if status_key != "done":
             continue
 
-        sprint_info = get_last_sprint(fields.get(sprint_field))
-        if not sprint_info:
+        resolution_date = fields.get("resolutiondate")
+        if not resolution_date:
             continue
-        sid, sname = sprint_info
+        dt = datetime.fromisoformat(resolution_date[:10])
+        iso = dt.isocalendar()
+        week_key = f"{iso.year}-W{iso.week:02d}"  # e.g. "2024-W07"
 
         sp = 0.0
         try:
@@ -172,20 +171,19 @@ def aggregate_by_sprint(
         except (TypeError, ValueError):
             pass
 
-        # Use aggregate time (includes time logged on subtasks)
         hours = (fields.get("aggregatetimespent") or fields.get("timespent") or 0) / 3600
 
-        if sid not in data:
-            data[sid] = {"name": sname, "sp": 0.0, "hours": 0.0}
-        data[sid]["sp"] += sp
-        data[sid]["hours"] += hours
+        if week_key not in data:
+            data[week_key] = {"sp": 0.0, "hours": 0.0}
+        data[week_key]["sp"] += sp
+        data[week_key]["hours"] += hours
 
     return data
 
 
 def write_csv(rows: list[dict], path: str) -> None:
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    fieldnames = ["Sprint", "Story Points", "Hours Spent", "Productivity (SP/h×100)"]
+    fieldnames = ["Week", "Story Points", "Hours Spent", "Productivity (SP/h×100)"]
     with open(path, "w", newline="", encoding="utf-8") as fh:
         writer = csv.DictWriter(fh, fieldnames=fieldnames)
         writer.writeheader()
@@ -196,7 +194,7 @@ def write_csv(rows: list[dict], path: str) -> None:
 def write_chart(rows: list[dict], path: str) -> None:
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
 
-    labels = [r["Sprint"] for r in rows]
+    labels = [r["Week"] for r in rows]
     sp = [r["Story Points"] for r in rows]
     hours = [r["Hours Spent"] for r in rows]
     productivity = [r["Productivity (SP/h×100)"] for r in rows]
@@ -224,7 +222,7 @@ def write_chart(rows: list[dict], path: str) -> None:
         label="Productivity (SP/h×100)", zorder=3,
     )
     ax1.set_ylabel("Story Points / Productivity", fontsize=11)
-    ax1.set_xlabel("Sprint", fontsize=11)
+    ax1.set_xlabel("Week", fontsize=11)
     ax1.set_xticks(x)
     ax1.set_xticklabels(labels, rotation=45, ha="right", fontsize=9)
     ax1.set_ylim(bottom=0)
@@ -233,7 +231,7 @@ def write_chart(rows: list[dict], path: str) -> None:
     bar_handle = Patch(facecolor="steelblue", alpha=0.55, label="Hours Spent")
     ax1.legend(handles=[bar_handle, line_sp, line_prod], loc="upper left", fontsize=9)
 
-    plt.title("Sprint Productivity Report", fontsize=13, pad=12)
+    plt.title("Weekly Productivity Report", fontsize=13, pad=12)
     plt.tight_layout()
     plt.savefig(path, dpi=150, bbox_inches="tight")
     plt.close()
@@ -245,10 +243,6 @@ def main() -> None:
         description="Generate a sprint productivity report (CSV + chart) from a Jira filter."
     )
     parser.add_argument("filter_id", help="Jira filter ID (numeric)")
-    parser.add_argument(
-        "--sprint-field", default=None, metavar="FIELD_ID",
-        help="Sprint custom field ID (auto-detected if omitted)",
-    )
     parser.add_argument(
         "--sp-field", default=None, metavar="FIELD_ID",
         help="Story points custom field ID (auto-detected if omitted)",
@@ -266,11 +260,6 @@ def main() -> None:
     client = connect_jira()
     field_map = get_field_map(client)
 
-    sprint_field = args.sprint_field or detect_sprint_field(field_map)
-    if not sprint_field:
-        print("[ERROR] Sprint field not detected. Use --sprint-field FIELD_ID to specify it.")
-        sys.exit(1)
-
     sp_field = args.sp_field or detect_story_points_field(field_map)
     if not sp_field:
         print("[ERROR] Story points field not detected. Use --sp-field FIELD_ID to specify it.")
@@ -280,7 +269,7 @@ def main() -> None:
     issues = paginate_jql(
         client,
         f"filter={args.filter_id}",
-        [sprint_field, sp_field, "timespent", "aggregatetimespent", "status"],
+        [sp_field, "timespent", "aggregatetimespent", "status", "resolutiondate"],
     )
     print(f"[INFO] Retrieved {len(issues)} issue(s).")
 
@@ -288,20 +277,20 @@ def main() -> None:
         print("[WARN] No issues found.")
         sys.exit(0)
 
-    sprint_data = aggregate_by_sprint(issues, sprint_field, sp_field)
+    month_data = aggregate_by_week(issues, sp_field)
 
-    if not sprint_data:
-        print("[WARN] No delivered issues with sprint data found.")
+    if not month_data:
+        print("[WARN] No delivered issues with resolution date found.")
         sys.exit(0)
 
-    # Sort by sprint ID (chronological order)
+    # Sort chronologically by week key (YYYY-W##)
     rows = []
-    for _, d in sorted(sprint_data.items()):
+    for month, d in sorted(month_data.items()):
         sp_val = round(d["sp"], 1)
         hours_val = round(d["hours"], 2)
         prod = round(sp_val / hours_val * 100, 2) if hours_val > 0 else 0.0
         rows.append({
-            "Sprint": d["name"],
+            "Week": month,
             "Story Points": sp_val,
             "Hours Spent": hours_val,
             "Productivity (SP/h×100)": prod,
