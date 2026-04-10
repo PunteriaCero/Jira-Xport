@@ -56,3 +56,4 @@ jobs:
           name: jira-export-${{ inputs.filter_id }}
           path: ${{ steps.export.outputs.csv_path }}
           if-no-files-found: error
+          retention-days: 1
