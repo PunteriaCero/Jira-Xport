@@ -106,6 +106,39 @@ def get_time_fields(client: JIRA) -> set[str]:
     return set(KNOWN_TIME_FIELDS)
 
 
+def detect_sprint_field(client: JIRA) -> str | None:
+    """Return the custom field ID for Sprint by inspecting /rest/api/3/field."""
+    url = f"{client._options['server']}/rest/api/3/field"
+    try:
+        response = client._session.get(url, headers={"Accept": "application/json"})
+        if response.status_code == 200:
+            for f in response.json():
+                if "sprint" in f.get("schema", {}).get("custom", "").lower():
+                    print(f"[INFO] Sprint field: {f['id']} ({f.get('name')})")
+                    return f["id"]
+    except Exception as e:
+        print(f"[WARN] Could not detect sprint field: {e}")
+    return None
+
+
+def _pick_latest_sprint(sprint_list: list) -> dict | None:
+    """Return the sprint with the latest endDate, falling back to the last item."""
+    valid = [s for s in sprint_list if isinstance(s, dict) and s.get("endDate")]
+    if valid:
+        return max(valid, key=lambda s: s["endDate"])
+    items = [s for s in sprint_list if isinstance(s, dict)]
+    return items[-1] if items else None
+
+
+def _pick_latest_fix_version(version_list: list) -> dict | None:
+    """Return the fix version with the latest releaseDate, falling back to the last item."""
+    valid = [v for v in version_list if isinstance(v, dict) and v.get("releaseDate")]
+    if valid:
+        return max(valid, key=lambda v: v["releaseDate"])
+    items = [v for v in version_list if isinstance(v, dict)]
+    return items[-1] if items else None
+
+
 def _is_epic(issue: dict) -> bool:
     name = issue.get("fields", {}).get("issuetype", {}).get("name", "").lower()
     return "epic" in name or "épica" in name or "epica" in name
@@ -115,7 +148,7 @@ def _is_subtask(issue: dict) -> bool:
     return bool(issue.get("fields", {}).get("issuetype", {}).get("subtask", False))
 
 
-def _extract(field_id: str, issue: dict, parent_lookup: dict[str, str] | None = None, time_fields: set[str] | None = None) -> str:
+def _extract(field_id: str, issue: dict, parent_lookup: dict[str, str] | None = None, time_fields: set[str] | None = None, sprint_field: str | None = None) -> str:
     """Dynamically extract a field value from a raw Jira API issue dict."""
     if field_id == "_epic_key":
         if _is_epic(issue):
@@ -143,11 +176,51 @@ def _extract(field_id: str, issue: dict, parent_lookup: dict[str, str] | None = 
         parent = issue.get("fields", {}).get("parent")
         return parent.get("key", "-") if parent else "-"
 
+    # Virtual sprint date fields — resolved from the actual sprint custom field
+    if field_id in ("_sprint_start", "_sprint_end"):
+        if not sprint_field:
+            return "-"
+        raw = issue.get("fields", {}).get(sprint_field)
+        if not raw:
+            return "-"
+        sprint_list = raw if isinstance(raw, list) else [raw]
+        sprint = _pick_latest_sprint(sprint_list)
+        if not sprint:
+            return "-"
+        date_key = "startDate" if field_id == "_sprint_start" else "endDate"
+        val = sprint.get(date_key, "")
+        return val[:10] if val else "-"
+
+    # Virtual field: release date of the latest fix version
+    if field_id == "_fix_version_date":
+        raw = issue.get("fields", {}).get("fixVersions")
+        if not isinstance(raw, list) or not raw:
+            return "-"
+        version = _pick_latest_fix_version(raw)
+        if not version:
+            return "-"
+        return version.get("releaseDate", "-") or "-"
+
     value = issue.get("fields", {}).get(field_id)
     if value is None:
         return ""
 
-    # List fields (labels → list[str], components/fixVersions → list[dict])
+    # fixVersions: pick the version with the latest releaseDate
+    if field_id == "fixVersions":
+        if not isinstance(value, list) or not value:
+            return ""
+        version = _pick_latest_fix_version(value)
+        return version.get("name", "") if version else ""
+
+    # Sprint field: pick the sprint with the latest endDate
+    if sprint_field and field_id == sprint_field:
+        sprint_list = value if isinstance(value, list) else [value]
+        sprint = _pick_latest_sprint(sprint_list)
+        if not sprint:
+            return "-"
+        return sprint.get("name", "-")
+
+    # List fields (labels → list[str], components → list[dict])
     if isinstance(value, list):
         parts = [
             item.get("name", str(item)) if isinstance(item, dict) else str(item)
@@ -262,6 +335,7 @@ def export_to_csv(
     output_path: str,
     parent_lookup: dict[str, str] | None = None,
     time_fields: set[str] | None = None,
+    sprint_field: str | None = None,
 ) -> None:
     os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
 
@@ -269,7 +343,7 @@ def export_to_csv(
         writer = csv.writer(fh)
         writer.writerow(headers)
         for issue in issues:
-            writer.writerow([_extract(fid, issue, parent_lookup, time_fields) for fid in field_ids])
+            writer.writerow([_extract(fid, issue, parent_lookup, time_fields, sprint_field) for fid in field_ids])
 
     print(f"[OK] Exported {len(issues)} issues → {output_path}")
 
@@ -314,6 +388,7 @@ def main() -> None:
 
     client = connect_jira()
     time_fields = get_time_fields(client)
+    sprint_field = detect_sprint_field(client)
 
     # Resolve columns: use filter's custom config, or warn and export KEY only
     columns = get_filter_columns(client, args.filter_id)
@@ -337,6 +412,23 @@ def main() -> None:
     field_ids = ["_epic_key", "_issue_key", "_sub_key"] + field_ids
     headers = ["EpicKey", "IssueKey", "Sub-Key"] + headers
 
+    # Mandatory fields always inserted at the front (after hierarchy columns)
+    mandatory: list[tuple[str, str]] = [
+        ("fixVersions", "Versiones corregidas"),
+        ("_fix_version_date", "Fecha Publicacion"),
+    ]
+    if sprint_field:
+        mandatory.append((sprint_field, "Sprint"))
+        mandatory.append(("_sprint_start", "Fecha de inicio del sprint"))
+        mandatory.append(("_sprint_end", "Fecha de cierre del sprint"))
+    for fid, label in reversed(mandatory):
+        if fid in field_ids:
+            idx = field_ids.index(fid)
+            field_ids.pop(idx)
+            headers.pop(idx)
+        field_ids.insert(3, fid)
+        headers.insert(3, label)
+
     issues = get_issues_from_filter(client, args.filter_id, field_ids)
 
     if args.subtasks is not None:
@@ -358,7 +450,7 @@ def main() -> None:
             parent_lookup[issue["key"]] = parent.get("key", "")
 
     output_path = build_output_path(args.filter_id, args.output)
-    export_to_csv(issues, headers, field_ids, output_path, parent_lookup, time_fields)
+    export_to_csv(issues, headers, field_ids, output_path, parent_lookup, time_fields, sprint_field)
 
 
 if __name__ == "__main__":
