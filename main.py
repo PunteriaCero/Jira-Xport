@@ -121,6 +121,32 @@ def detect_sprint_field(client: JIRA) -> str | None:
     return None
 
 
+def detect_story_points_field(client: JIRA) -> str | None:
+    """Return the custom field ID for Story Points by inspecting /rest/api/3/field."""
+    url = f"{client._options['server']}/rest/api/3/field"
+    try:
+        response = client._session.get(url, headers={"Accept": "application/json"})
+        if response.status_code == 200:
+            fields = response.json()
+            for f in fields:
+                if f.get("name", "").lower() == "story points":
+                    print(f"[INFO] Story points field: {f['id']} ({f.get('name')})")
+                    return f["id"]
+            for f in fields:
+                custom = f.get("schema", {}).get("custom", "").lower()
+                if any(kw in custom for kw in ("story_points", "storypoints", "story-points")):
+                    print(f"[INFO] Story points field (by schema): {f['id']} ({f.get('name')})")
+                    return f["id"]
+            for f in fields:
+                name = f.get("name", "").lower()
+                if "story" in name and "point" in name:
+                    print(f"[INFO] Story points field (by name): {f['id']} ({f.get('name')})")
+                    return f["id"]
+    except Exception as e:
+        print(f"[WARN] Could not detect story points field: {e}")
+    return None
+
+
 def _pick_latest_sprint(sprint_list: list) -> dict | None:
     """Return the sprint with the latest endDate, falling back to the last item."""
     valid = [s for s in sprint_list if isinstance(s, dict) and s.get("endDate")]
@@ -148,9 +174,25 @@ def _is_subtask(issue: dict) -> bool:
     return bool(issue.get("fields", {}).get("issuetype", {}).get("subtask", False))
 
 
-def _extract(field_id: str, issue: dict, parent_lookup: dict[str, str] | None = None, time_fields: set[str] | None = None, sprint_field: str | None = None) -> str:
+def _extract(
+    field_id: str,
+    issue: dict,
+    parent_lookup: dict[str, str] | None = None,
+    time_fields: set[str] | None = None,
+    sprint_field: str | None = None,
+    issues_by_key: dict[str, dict] | None = None,
+    inherited_fields: set[str] | None = None,
+) -> str:
     """Dynamically extract a field value from a raw Jira API issue dict."""
+    # Fields inherited from the parent ticket (e.g. Fecha Resolucion, Story Points)
+    if inherited_fields and field_id in inherited_fields and _is_subtask(issue):
+        parent_key = (issue.get("fields", {}).get("parent") or {}).get("key", "")
+        parent_issue = (issues_by_key or {}).get(parent_key)
+        if parent_issue:
+            return _extract(field_id, parent_issue, parent_lookup, time_fields, sprint_field, issues_by_key, inherited_fields)
+
     if field_id == "_epic_key":
+
         if _is_epic(issue):
             return issue.get("key", "")
         parent_key = (issue.get("fields", {}).get("parent") or {}).get("key", "")
@@ -336,6 +378,8 @@ def export_to_csv(
     parent_lookup: dict[str, str] | None = None,
     time_fields: set[str] | None = None,
     sprint_field: str | None = None,
+    issues_by_key: dict[str, dict] | None = None,
+    inherited_fields: set[str] | None = None,
 ) -> None:
     os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
 
@@ -343,7 +387,7 @@ def export_to_csv(
         writer = csv.writer(fh)
         writer.writerow(headers)
         for issue in issues:
-            writer.writerow([_extract(fid, issue, parent_lookup, time_fields, sprint_field) for fid in field_ids])
+            writer.writerow([_extract(fid, issue, parent_lookup, time_fields, sprint_field, issues_by_key, inherited_fields) for fid in field_ids])
 
     print(f"[OK] Exported {len(issues)} issues → {output_path}")
 
@@ -389,6 +433,12 @@ def main() -> None:
     client = connect_jira()
     time_fields = get_time_fields(client)
     sprint_field = detect_sprint_field(client)
+    story_points_field = detect_story_points_field(client)
+
+    # Fields whose values, for subtasks, are inherited from the parent ticket
+    inherited_fields = {"resolutiondate"}
+    if story_points_field:
+        inherited_fields.add(story_points_field)
 
     # Resolve columns: use filter's custom config, or warn and export KEY only
     columns = get_filter_columns(client, args.filter_id)
@@ -449,8 +499,21 @@ def main() -> None:
         if parent:
             parent_lookup[issue["key"]] = parent.get("key", "")
 
+    issues_by_key: dict[str, dict] = {issue["key"]: issue for issue in issues}
+
     output_path = build_output_path(args.filter_id, args.output)
-    export_to_csv(issues, headers, field_ids, output_path, parent_lookup, time_fields, sprint_field)
+    export_to_csv(
+        issues,
+        headers,
+        field_ids,
+        output_path,
+        parent_lookup,
+        time_fields,
+        sprint_field,
+        issues_by_key,
+        inherited_fields,
+    )
+
 
 
 if __name__ == "__main__":
