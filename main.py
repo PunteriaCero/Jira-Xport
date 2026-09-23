@@ -17,6 +17,15 @@ JIRA_API_TOKEN = os.getenv("JIRA_API_TOKEN")
 # Fields treated as plain date strings (truncate to YYYY-MM-DD)
 DATE_FIELDS = {"created", "updated", "duedate", "resolutiondate"}
 
+# Column labels (any language/locale) recognized as the Story Points field
+STORY_POINTS_LABELS = {
+    "story points",
+    "story point estimate",
+    "puntos de historia",
+    "puntos de historia estimados",
+    "puntos historia",
+}
+
 # System time-tracking fields that store values in seconds (converted to hours on export)
 KNOWN_TIME_FIELDS = {
     "timespent",
@@ -144,6 +153,18 @@ def detect_story_points_field(client: JIRA) -> str | None:
                     return f["id"]
     except Exception as e:
         print(f"[WARN] Could not detect story points field: {e}")
+    return None
+
+
+def find_story_points_field_in_columns(columns: list[dict] | None) -> str | None:
+    """Match the Story Points field by its label in the filter's own column config (locale-independent)."""
+    if not columns:
+        return None
+    for col in columns:
+        label = (col.get("label") or "").strip().lower()
+        if label in STORY_POINTS_LABELS:
+            print(f"[INFO] Story points field (by column label): {col.get('value')} ({col.get('label')})")
+            return col.get("value")
     return None
 
 
@@ -433,12 +454,6 @@ def main() -> None:
     client = connect_jira()
     time_fields = get_time_fields(client)
     sprint_field = detect_sprint_field(client)
-    story_points_field = detect_story_points_field(client)
-
-    # Fields whose values, for subtasks, are inherited from the parent ticket
-    inherited_fields = {"resolutiondate"}
-    if story_points_field:
-        inherited_fields.add(story_points_field)
 
     # Resolve columns: use filter's custom config, or warn and export KEY only
     columns = get_filter_columns(client, args.filter_id)
@@ -452,6 +467,15 @@ def main() -> None:
         )
         field_ids = ["issuekey"]
         headers = ["Key"]
+
+    # Story Points field: prefer matching the filter's own column label (works in any locale),
+    # falling back to field-metadata detection.
+    story_points_field = find_story_points_field_in_columns(columns) or detect_story_points_field(client)
+
+    # Fields whose values, for subtasks, are inherited from the parent ticket
+    inherited_fields = {"resolutiondate"}
+    if story_points_field:
+        inherited_fields.add(story_points_field)
 
     # Remove "parent" and "issuekey" from filter columns — covered by the 3 fixed hierarchy columns
     REDUNDANT_FIELDS = {"parent", "issuekey"}
